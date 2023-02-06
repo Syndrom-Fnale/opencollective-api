@@ -1,7 +1,10 @@
 import config from 'config';
 import { get, result, toUpper } from 'lodash';
+import type { CreateOptions } from 'sequelize';
+import Stripe from 'stripe';
 
 import { Service } from '../../constants/connected_account';
+import { PAYMENT_METHOD_SERVICE, PAYMENT_METHOD_TYPE } from '../../constants/paymentMethods';
 import * as constants from '../../constants/transactions';
 import {
   createRefundTransaction,
@@ -368,4 +371,111 @@ export async function getOrCloneCardPaymentMethod(
     id: platformPaymentMethod.data?.stripePaymentMethodByHostCustomer[hostCustomer],
     customer: hostCustomer,
   };
+}
+
+function formatPaymentMethodName(
+  paymentMethod: Stripe.PaymentMethod,
+  chargePaymentMethodDetails?: Stripe.Charge.PaymentMethodDetails,
+) {
+  switch (paymentMethod.type) {
+    case PAYMENT_METHOD_TYPE.US_BANK_ACCOUNT: {
+      return `${paymentMethod.us_bank_account.bank_name} ****${paymentMethod.us_bank_account.last4}`;
+    }
+    case PAYMENT_METHOD_TYPE.SEPA_DEBIT: {
+      return `${paymentMethod.sepa_debit.bank_code} ****${paymentMethod.sepa_debit.last4}`;
+    }
+    case 'card': {
+      return paymentMethod.card.last4;
+    }
+    case PAYMENT_METHOD_TYPE.BACS_DEBIT: {
+      return `${paymentMethod.bacs_debit.sort_code} ****${paymentMethod.bacs_debit.last4}`;
+    }
+    case PAYMENT_METHOD_TYPE.BANCONTACT: {
+      return `${chargePaymentMethodDetails?.bancontact?.bank_code} ***${chargePaymentMethodDetails?.bancontact?.iban_last4}`;
+    }
+    default: {
+      return '';
+    }
+  }
+}
+
+function mapStripePaymentMethodExtraData(
+  pm: Stripe.PaymentMethod,
+  chargePaymentMethodDetails?: Stripe.Charge.PaymentMethodDetails,
+): object {
+  if (pm.type === 'card') {
+    return {
+      brand: pm.card.brand,
+      country: pm.card.country,
+      expYear: pm.card.exp_year,
+      expMonth: pm.card.exp_month,
+      funding: pm.card.funding,
+      fingerprint: pm.card.fingerprint,
+      wallet: pm.card.wallet,
+    };
+  }
+
+  if (pm.type === 'bancontact') {
+    return {
+      ...pm['bancontact'],
+      ...chargePaymentMethodDetails?.['bancontact'],
+    };
+  }
+
+  return pm[pm.type];
+}
+
+export async function createPaymentMethod(
+  {
+    stripePaymentMethod,
+    stripeAccount,
+    stripeCustomer,
+    attachedToCustomer,
+    originPaymentIntent,
+    originOrder,
+    extraData,
+  }: {
+    stripePaymentMethod: Stripe.PaymentMethod;
+    stripeAccount: string;
+    stripeCustomer: string;
+    attachedToCustomer?: boolean;
+    originPaymentIntent?: Stripe.PaymentIntent;
+    originOrder?: typeof models.Order;
+    extraData?: object;
+  },
+  createOptions?: CreateOptions,
+): Promise<typeof PaymentMethod> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const paymentIntentCharges = (originPaymentIntent as any)?.charges?.data;
+  const paymentIntentCharge = <Stripe.Charge>(
+    (paymentIntentCharges && paymentIntentCharges.length >= 1 && paymentIntentCharges[0])
+  );
+  const paymentMethodChargeDetails = paymentIntentCharge?.payment_method_details;
+
+  const paymentMethodData = {
+    stripePaymentMethodId: stripePaymentMethod.id,
+    stripeAccount,
+    ...mapStripePaymentMethodExtraData(stripePaymentMethod, paymentMethodChargeDetails),
+    ...extraData,
+  };
+
+  const paymentMethodName = formatPaymentMethodName(stripePaymentMethod, paymentMethodChargeDetails);
+
+  return await PaymentMethod.create(
+    {
+      type: stripePaymentMethod.type === 'card' ? PAYMENT_METHOD_TYPE.CREDITCARD : stripePaymentMethod.type,
+      service: PAYMENT_METHOD_SERVICE.STRIPE,
+      name: paymentMethodName,
+      token: stripePaymentMethod.id,
+      customerId: stripeCustomer,
+      CreatedByUserId: originOrder?.CreatedByUserId,
+      CollectiveId: originOrder?.FromCollectiveId,
+      saved:
+        attachedToCustomer ||
+        (stripePaymentMethod.type !== 'bancontact' && originPaymentIntent?.setup_future_usage === 'off_session'),
+      confirmedAt: new Date(),
+      data: paymentMethodData,
+    },
+    createOptions,
+  );
 }
