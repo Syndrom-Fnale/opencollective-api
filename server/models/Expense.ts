@@ -24,10 +24,10 @@ import { sanitizeTags, validateTags } from '../lib/tags';
 import { computeDatesAsISOStrings } from '../lib/utils';
 import CustomDataTypes from '../models/DataTypes';
 
-import ExpenseAttachedFile from './ExpenseAttachedFile';
-import ExpenseItem from './ExpenseItem';
+import { ExpenseAttachedFile } from './ExpenseAttachedFile';
+import { ExpenseItem } from './ExpenseItem';
 import PayoutMethod, { PayoutMethodTypes } from './PayoutMethod';
-import RecurringExpense from './RecurringExpense';
+import { RecurringExpense } from './RecurringExpense';
 import User from './User';
 import VirtualCard from './VirtualCard';
 
@@ -646,12 +646,7 @@ Expense.init(
     tags: {
       type: DataTypes.ARRAY(DataTypes.STRING),
       set(tags: string[] | null) {
-        const sanitizedTags = sanitizeTags(tags);
-        if (!sanitizedTags?.length) {
-          this.setDataValue('tags', null);
-        } else {
-          this.setDataValue('tags', sanitizedTags);
-        }
+        this.setDataValue('tags', sanitizeTags(tags));
       },
       validate: { validateTags },
     },

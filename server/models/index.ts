@@ -1,23 +1,23 @@
 import sequelize, { Op } from '../lib/sequelize';
 
-import Activity from './Activity';
+import { Activity } from './Activity';
 import Application from './Application';
 import Collective from './Collective';
 import Comment from './Comment';
-import ConnectedAccount from './ConnectedAccount';
+import { ConnectedAccount } from './ConnectedAccount';
 import Conversation from './Conversation';
 import ConversationFollower from './ConversationFollower';
-import CurrencyExchangeRate from './CurrencyExchangeRate';
+import { CurrencyExchangeRate } from './CurrencyExchangeRate';
 import EmojiReaction from './EmojiReaction';
 import Expense from './Expense';
-import ExpenseAttachedFile from './ExpenseAttachedFile';
-import ExpenseItem from './ExpenseItem';
-import HostApplication from './HostApplication';
+import { ExpenseAttachedFile } from './ExpenseAttachedFile';
+import { ExpenseItem } from './ExpenseItem';
+import { HostApplication } from './HostApplication';
 import LegalDocument from './LegalDocument';
 import Member from './Member';
 import MemberInvitation from './MemberInvitation';
 import MigrationLog from './MigrationLog';
-import Notification from './Notification';
+import { Notification } from './Notification';
 import OAuthAuthorizationCode from './OAuthAuthorizationCode';
 import Order from './Order';
 import PaymentMethod from './PaymentMethod';
@@ -25,7 +25,7 @@ import PayoutMethod from './PayoutMethod';
 import PaypalPlan from './PaypalPlan';
 import PaypalProduct from './PaypalProduct';
 import PersonalToken from './PersonalToken';
-import RecurringExpense from './RecurringExpense';
+import { RecurringExpense } from './RecurringExpense';
 import RequiredLegalDocument from './RequiredLegalDocument';
 import SocialLink from './SocialLink';
 import Subscription from './Subscription';
@@ -43,7 +43,7 @@ import VirtualCard from './VirtualCard';
  * Models.
  */
 const models = {
-  Activity: Activity,
+  Activity,
   Application: Application,
   Collective: Collective,
   Comment: Comment,
@@ -399,6 +399,47 @@ models.SocialLink.belongsTo(models.Collective, {
 });
 models.Collective.hasMany(models.SocialLink, { foreignKey: 'CollectiveId', as: 'socialLinks' });
 
+export default models;
+
 export { sequelize, Op };
 
-export default models;
+export {
+  Activity,
+  Application,
+  Collective,
+  Comment,
+  EmojiReaction,
+  ConnectedAccount,
+  Conversation,
+  ConversationFollower,
+  CurrencyExchangeRate,
+  Expense,
+  ExpenseAttachedFile,
+  ExpenseItem,
+  HostApplication,
+  LegalDocument,
+  Member,
+  MemberInvitation,
+  MigrationLog,
+  Notification,
+  OAuthAuthorizationCode,
+  Order,
+  PaymentMethod,
+  PayoutMethod,
+  PaypalPlan,
+  PaypalProduct,
+  RecurringExpense,
+  RequiredLegalDocument,
+  Subscription,
+  SuspendedAsset,
+  Tier,
+  Transaction,
+  TransactionSettlement,
+  Update,
+  UploadedFile,
+  User,
+  UserToken,
+  VirtualCard,
+  PersonalToken,
+  SocialLink,
+};

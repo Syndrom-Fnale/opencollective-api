@@ -19,7 +19,7 @@ import {
 import { roles } from '../../../constants';
 import activities from '../../../constants/activities';
 import { Service } from '../../../constants/connected_account';
-import status from '../../../constants/order_status';
+import OrderStatuses from '../../../constants/order_status';
 import { PAYMENT_METHOD_SERVICE } from '../../../constants/paymentMethods';
 import { purgeAllCachesForAccount } from '../../../lib/cache';
 import logger from '../../../lib/logger';
@@ -41,7 +41,7 @@ import { ProcessOrderAction } from '../enum/ProcessOrderAction';
 import { idDecode, IDENTIFIER_TYPES } from '../identifiers';
 import { AccountReferenceInput, fetchAccountWithReference } from '../input/AccountReferenceInput';
 import { AmountInput, assertAmountInputCurrency, getValueInCentsFromAmountInput } from '../input/AmountInput';
-import { OrderCreateInput } from '../input/OrderCreateInput';
+import { OrderCreateInput, PendingOrderCreateInput } from '../input/OrderCreateInput';
 import { fetchOrdersWithReferences, fetchOrderWithReference, OrderReferenceInput } from '../input/OrderReferenceInput';
 import { OrderUpdateInput } from '../input/OrderUpdateInput';
 import PaymentIntentInput from '../input/PaymentIntentInput';
@@ -190,16 +190,16 @@ const orderMutations = {
 
       if (!req.remoteUser.isAdminOfCollective(order.fromCollective)) {
         throw new Unauthorized("You don't have permission to cancel this recurring contribution");
-      } else if (!order.Subscription?.isActive && order.status === status.CANCELLED) {
+      } else if (!order.Subscription?.isActive && order.status === OrderStatuses.CANCELLED) {
         throw new Error('Recurring contribution already canceled');
-      } else if (order.status === status.PAID) {
+      } else if (order.status === OrderStatuses.PAID) {
         throw new Error('Cannot cancel a paid order');
       }
 
       // Check 2FA
       await twoFactorAuthLib.enforceForAccountAdmins(req, order.fromCollective, { onlyAskOnLogin: true });
 
-      await order.update({ status: status.CANCELLED });
+      await order.update({ status: OrderStatuses.CANCELLED });
       await order.Subscription.deactivate();
 
       await models.Activity.create({
@@ -371,7 +371,7 @@ const orderMutations = {
     async resolve(_, args, req) {
       checkRemoteUserCanUseOrders(req);
 
-      const order = await fetchOrderWithReference(args.order);
+      let order = await fetchOrderWithReference(args.order);
       const toAccount = await req.loaders.Collective.byId.load(order.CollectiveId);
       const host = await toAccount.getHostCollective();
 
@@ -426,7 +426,30 @@ const orderMutations = {
           await order.save();
         }
 
-        return order.markAsPaid(req.remoteUser);
+        order = await order.markAsPaid(req.remoteUser);
+
+        if (order.data.isPendingContribution) {
+          const tier = order.TierId && (await req.loaders.Tier.byId.load(order.TierId));
+          const fromAccount = await req.loaders.Collective.byId.load(order.FromCollectiveId);
+          await models.Activity.create({
+            type: activities.ORDER_PENDING_RECEIVED,
+            UserId: req.remoteUser.id,
+            CollectiveId: order.CollectiveId,
+            FromCollectiveId: order.FromCollectiveId,
+            OrderId: order.id,
+            HostCollectiveId: host.id,
+            data: {
+              order: { ...order.info, ...pick(order.data, ['expectedAt', 'memo']) },
+              fromAccountInfo: order.data.fromAccountInfo,
+              fromCollective: fromAccount.info,
+              host: host.info,
+              toCollective: toAccount.info,
+              tierName: tier?.name,
+            },
+          });
+        }
+
+        return order;
       } else if (args.action === 'MARK_AS_EXPIRED') {
         if (!(await canMarkAsExpired(req, order))) {
           throw new ValidationFailed(`Only pending orders can be marked as expired, this one is ${order.status}`);
@@ -738,6 +761,74 @@ const orderMutations = {
         logger.error(e);
         throw new Error('Sorry, but we cannot support this payment method for this particular transaction.');
       }
+    },
+  },
+  createPendingOrder: {
+    type: new GraphQLNonNull(Order),
+    description: 'To submit a new order. Scope: "orders".',
+    args: {
+      order: {
+        type: new GraphQLNonNull(PendingOrderCreateInput),
+      },
+    },
+    async resolve(_, args, req) {
+      if (!checkScope(req, 'orders')) {
+        throw new Unauthorized('The User Token is not allowed for operations in scope "orders".');
+      }
+
+      const toAccount = await fetchAccountWithReference(args.order.toAccount, { throwIfMissing: true });
+      const host = await toAccount.getHostCollective();
+
+      if (!req.remoteUser?.isAdminOfCollective(host)) {
+        throw new Unauthorized('Only host admins can process orders');
+      }
+      const fromAccount = await fetchAccountWithReference(args.order.fromAccount, { throwIfMissing: true });
+
+      const orderProps = {
+        CreatedByUserId: req.remoteUser.id,
+        FromCollectiveId: fromAccount.id,
+        CollectiveId: toAccount.id,
+        quantity: 1,
+        totalAmount: args.order.amount.valueInCents,
+        currency: args.order.amount.currency,
+        description: args.order.description || models.Order.generateDescription(toAccount, undefined, undefined),
+        data: {
+          ...(args.order.customData || {}),
+          fromAccountInfo: args.order.fromAccountInfo,
+          expectedAt: args.order.expectedAt,
+          isPendingContribution: true,
+        },
+        status: OrderStatuses.PENDING,
+      };
+
+      const tier = args.order.tier && (await fetchTierWithReference(args.order.tier, { throwIfMissing: true }));
+      if (tier) {
+        if (!args.order.description) {
+          orderProps.description = models.Order.generateDescription(toAccount, undefined, undefined, tier);
+        }
+        orderProps.TierId = tier.id;
+      }
+
+      const order = await models.Order.create(orderProps);
+
+      await models.Activity.create({
+        type: activities.ORDER_PENDING_CREATED,
+        UserId: req.remoteUser.id,
+        CollectiveId: toAccount.id,
+        FromCollectiveId: fromAccount.id,
+        OrderId: order.id,
+        HostCollectiveId: host.id,
+        data: {
+          order: { ...order.info, ...pick(orderProps.data, ['expectedAt', 'memo']) },
+          fromAccountInfo: orderProps.data.fromAccountInfo,
+          fromCollective: fromAccount.info,
+          host: host.info,
+          toCollective: toAccount.info,
+          tierName: tier?.name,
+        },
+      });
+
+      return order;
     },
   },
 };
